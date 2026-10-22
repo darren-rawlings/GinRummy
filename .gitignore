@@ -1,0 +1,23 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+
+# .NET build output
+bin/
+# ...but not the AdMob plugin's Android libraries: without them a fresh clone builds with no ads.
+!addons/admob/android/bin/
+!addons/GodotGooglePlayBilling/bin/
+obj/
+*.user
+
+# Exports (publish builds via GitHub Releases, not commits)
+/build/
+*.apk
+*.aab
+*.exe
+*.pck
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vs/

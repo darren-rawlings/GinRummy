@@ -1,0 +1,11 @@
+<Project Sdk="Godot.NET.Sdk/4.7.2">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework Condition=" '$(GodotTargetPlatform)' == 'android' ">net9.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <RootNamespace>GameTemplate</RootNamespace>
+    <Nullable>enable</Nullable>
+    <!-- Unit tests are separate projects, and the AdMob plugin's sample code isn't needed: keep them out of the game assembly. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);tests/**;addons/admob/csharp/sample/**;addons/renegade_core/tests/**;addons/renegade_core/**/bin/**;addons/renegade_core/**/obj/**</DefaultItemExcludes>
+  </PropertyGroup>
+</Project>

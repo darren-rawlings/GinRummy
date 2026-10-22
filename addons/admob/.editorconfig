@@ -1,0 +1,4 @@
+# Third-party plugin code (Poing Studios AdMob). Treat it as generated so our nullable
+# warnings only cover our own code.
+[*.cs]
+generated_code = true

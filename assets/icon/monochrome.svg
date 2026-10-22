@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="432" height="432" viewBox="0 0 432 432">
+  <!-- Android themed icon: only the shape (alpha) is used, so cut-outs must be transparent, not black. -->
+  <defs>
+    <mask id="flames">
+      <rect width="432" height="432" fill="#fff"/>
+      <circle cx="216" cy="284" r="78" fill="#000"/>
+    </mask>
+    <mask id="piece">
+      <rect width="432" height="432" fill="#fff"/>
+      <circle cx="216" cy="284" r="49" fill="none" stroke="#000" stroke-width="7"/>
+    </mask>
+  </defs>
+  <!-- Fits the content inside Android's adaptive-icon safe zone (a 132 px radius circle). -->
+  <g transform="translate(216 216) scale(0.85) translate(-216 -200)" fill="#fff">
+    <g mask="url(#flames)">
+      <g transform="translate(216 300) scale(1.18) translate(-216 -300)">
+        <path d="M216 84 C232 124 284 140 300 196 C312 240 292 284 216 290 C140 284 120 240 132 196 C140 166 160 152 166 118 C184 140 186 162 198 172 C196 136 200 108 216 84 Z"/>
+        <path d="M290 130 C304 160 322 178 318 214 C314 236 300 248 286 256 C296 222 290 196 276 176 C284 162 290 148 290 130 Z"/>
+        <path d="M140 140 C138 168 124 184 118 210 C114 234 126 248 142 258 C136 226 142 200 156 182 C148 170 142 156 140 140 Z"/>
+      </g>
+    </g>
+    <circle cx="216" cy="284" r="70" mask="url(#piece)"/>
+  </g>
+</svg>
