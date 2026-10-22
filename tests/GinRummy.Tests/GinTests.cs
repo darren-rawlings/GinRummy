@@ -141,3 +141,41 @@ public class HandTests
 		Assert.True(match.Total(match.Winner) > match.Total(1 - match.Winner));
 	}
 }
+
+public class MatchScoringTests
+{
+	[Fact]
+	public void EveryHandWonAddsATenPointBoxAndTheTargetCanBeChosen()
+	{
+		var match = new GinMatch(50);
+		Assert.Equal(50, match.Target);
+		var random = new System.Random(3);
+		var ais = new[] { new GinAi(0, Renegade.Core.Difficulty.Hard, random), new GinAi(1, Renegade.Core.Difficulty.Hard, random) };
+		while (!match.IsOver)
+		{
+			var hand = new GinHand(Renegade.Cards.Deck.Shuffled(random), match.NextDealer);
+			for (int turns = 0; hand.Phase != GinPhase.Over && turns < 200; turns++)
+			{
+				var ai = ais[hand.Current];
+				if (hand.Phase == GinPhase.Offer)
+					hand.Offer(ai.WantsDiscard(hand));
+				else if (hand.Phase == GinPhase.Draw)
+				{
+					if (ai.WantsDiscard(hand))
+						hand.DrawDiscard();
+					else
+						hand.DrawStock();
+				}
+				else if (ai.KnockWith(hand) is { } knock)
+					hand.Knock(knock);
+				else
+					hand.Discard(ai.ChooseDiscard(hand));
+			}
+			int before = match.Score.Sum();
+			match.Record(hand);
+			if (hand.Result is { Drawn: false } r)
+				Assert.Equal(before + r.Points + GinMatch.BoxBonus, match.Score.Sum());
+		}
+		Assert.True(match.Score.Max() >= 50);
+	}
+}

@@ -34,12 +34,12 @@ public sealed record GinResult(
 /// With 10 or less deadwood after discarding you may knock; with none, it's gin. The defender
 /// then lays off deadwood on the knocker's melds (not after gin). The knocker scores the
 /// difference in deadwood; gin adds 25 and the defender lays nothing off; if the defender's
-/// deadwood is equal or less, it's an undercut: the defender scores the difference plus 25. If
+/// deadwood is equal or less, it's an undercut: the defender scores the difference plus 20. If
 /// only two cards are left in the stock, the hand is a draw.
 /// </summary>
 public sealed class GinHand
 {
-	public const int HandSize = 10, KnockLimit = 10, GinBonus = 25, UndercutBonus = 25;
+	public const int HandSize = 10, KnockLimit = 10, GinBonus = 25, UndercutBonus = 20;
 
 	private readonly List<Card>[] _hands = { new(), new() };
 	private readonly List<Card> _stock;
@@ -208,10 +208,17 @@ public sealed class GinHand
 	}
 }
 
-/// <summary>A match: hands to 100 points; a box (25) for every hand won, and 100 for the game.</summary>
+/// <summary>
+/// A match, scored as Gin Rummy Palace does: each hand's winner scores its points plus a box bonus
+/// of 10, and the first to reach the target (100 unless chosen otherwise) wins. No game bonus.
+/// </summary>
 public sealed class GinMatch
 {
-	public const int Target = 100, GameBonus = 100, BoxBonus = 25;
+	public const int BoxBonus = 10;
+
+	public GinMatch(int target = 100) => Target = target;
+
+	public int Target { get; }
 
 	public int[] Score { get; } = new int[2];
 	public int[] Boxes { get; } = new int[2];
@@ -227,11 +234,11 @@ public sealed class GinMatch
 		Hands++;
 		if (result.Drawn)
 			return;
-		Score[result.Winner] += result.Points;
+		Score[result.Winner] += result.Points + BoxBonus;
 		Boxes[result.Winner]++;
 		NextDealer = result.Winner;
 	}
 
-	/// <summary>The final totals: points, plus 25 a box, plus 100 for winning the game.</summary>
-	public int Total(int player) => Score[player] + BoxBonus * Boxes[player] + (Winner == player ? GameBonus : 0);
+	/// <summary>A player's total (the box bonuses are in the score already).</summary>
+	public int Total(int player) => Score[player];
 }

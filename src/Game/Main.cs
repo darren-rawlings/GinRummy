@@ -11,7 +11,7 @@ using Renegade.Ui;
 namespace GinRummy.Game;
 
 /// <summary>
-/// Gin rummy against Rosie, a match to 100 points. Your hand is kept arranged with its melds
+/// Gin rummy against Rosie, a match to 100 points (or as chosen). Your hand is kept arranged with its melds
 /// together and the deadwood at the end, with your deadwood count shown. On your turn tap the
 /// stock or the top of the discard pile to draw, then tap a card in your hand to discard it, or
 /// press Knock (or Gin!) when you can. At the end of each hand both hands are laid out face up.
@@ -37,8 +37,19 @@ public partial class Main : CardGame
 
 	protected override void LevelChanged(Difficulty difficulty) => _ai = new GinAi(1, difficulty, Random);
 
+	/// <summary>The points a match is played to (Settings › Play to).</summary>
+	private int Target => Settings.Extra.TryGetValue("target", out var t) && int.TryParse(t, out int n) && n > 0 ? n : 100;
+
 	protected override void AddSettings()
 	{
+		var targets = new[] { 50, 100, 150, 250 };
+		Hud.AddChoice("Play to", targets.Select(t => t.ToString()).ToArray(), System.Math.Max(0, System.Array.IndexOf(targets, Target)), choice =>
+		{
+			Settings.Extra["target"] = targets[choice].ToString();
+			Settings.Save();
+			if (!InProgress)
+				Run(StartRound());
+		});
 		_pass = Hud.AddButton("Pass", true, Control.LayoutPreset.CenterBottom, -150, 150, -192, -128, 28);
 		_pass.Visible = false;
 		_pass.Pressed += () =>
@@ -59,8 +70,8 @@ public partial class Main : CardGame
 	{
 		int round = Round;
 		_pass.Visible = _knock.Visible = false;
-		if (_match.IsOver)
-			_match = new GinMatch();
+		if (_match.IsOver || _match.Hands == 0)
+			_match = new GinMatch(Target);
 		_ai = new GinAi(1, Settings.Difficulty, Random);
 		_nodes.Clear();
 		_hand = null;
@@ -334,7 +345,7 @@ public partial class Main : CardGame
 
 	private void SetScore()
 	{
-		Hud.SetScore($"Match to 100: you {_match.Score[0]} · {_match.Score[1]} Rosie   ·   Wins {Wins.First}–{Wins.Second}");
+		Hud.SetScore($"Match to {_match.Target}: you {_match.Score[0]} · {_match.Score[1]} Rosie   ·   Wins {Wins.First}–{Wins.Second}");
 	}
 
 	protected override void Tapped(Vector3 origin, Vector3 direction, Vector2 screen)
