@@ -1,8 +1,8 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 2012
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GameTemplate", "GameTemplate.csproj", "{6F1C2A3B-4D5E-4F60-8A71-92B3C4D5E6F7}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GinRummy", "GinRummy.csproj", "{6F1C2A3B-4D5E-4F60-8A71-92B3C4D5E6F7}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GameTemplate.Tests", "tests\GameTemplate.Tests\GameTemplate.Tests.csproj", "{A1B2C3D4-E5F6-4789-9ABC-DEF012345678}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GinRummy.Tests", "tests\GinRummy.Tests\GinRummy.Tests.csproj", "{A1B2C3D4-E5F6-4789-9ABC-DEF012345678}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

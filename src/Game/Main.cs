@@ -1,277 +1,370 @@
-using GameTemplate.Core;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using GinRummy.Core;
 using Godot;
-using Renegade.Ads;
-using Renegade.Audio;
+using Renegade.Cards;
 using Renegade.Core;
-using Renegade.Dev;
-using Renegade.Looks;
 using Renegade.Play;
 using Renegade.Ui;
 
-namespace GameTemplate.Game;
+namespace GinRummy.Game;
 
 /// <summary>
-/// Starting point for a new game, built the way every Renegade game is: the shared stage (lights,
-/// reflection sky, table), a board on a rig that spins with a drag, the shared HUD (modes,
-/// difficulty, Style menu, Undo (ad), Start over, Settings with sound and freeze, a video
-/// tutorial behind Demo), material sounds, ads every 5th game, the winner's fire and the flight
-/// recorder. The placeholder game: tap the board to knock it, five knocks finish a game.
-/// Replace the board, the rules (src/Core), the tap, the tutorial pages and the clips with the
-/// real game. Tutorial clips: give each a case in PlayClip, then run
-/// addons/renegade_core/tools/Record-Clips.ps1 with their names.
+/// Gin rummy against Rosie, a match to 100 points. Your hand is kept arranged with its melds
+/// together and the deadwood at the end, with your deadwood count shown. On your turn tap the
+/// stock or the top of the discard pile to draw, then tap a card in your hand to discard it, or
+/// press Knock (or Gin!) when you can. At the end of each hand both hands are laid out face up.
 /// </summary>
-public partial class Main : Node3D
+public partial class Main : CardGame
 {
-	public const string Title = "Game Template";
+	private readonly Dictionary<Card, Card3D> _nodes = new();
+	private GinMatch _match = new();
+	private GinHand? _hand;
+	private GinAi _ai = null!;
+	private Button _pass = null!;
+	private Button _knock = null!;
 
-	/// <summary>Google's test ad units until the real ones exist in AdMob (see the release playbook).</summary>
-	private static readonly AdMobConfig AdUnits = AdMobConfig.Test;
+	protected override string Title => "Gin Rummy";
+	protected override string Hint => "Draw, then tap a card to discard it";
+	protected override bool SortYourHand => false;
+	protected override string NewGameText => _match.IsOver ? "New match" : "Next hand";
+	protected override IReadOnlyList<TutorialPage> TutorialPages => Tutorial.Pages;
+	protected override bool InProgress => !_match.IsOver && (_match.Hands > 0 || _hand is { Phase: not GinPhase.Over });
 
-	private const float Thickness = 0.4f;
+	private Vector3 StockAt => Table.Centre + new Vector3(-0.45f, 0, 0.05f);
+	private Vector3 DiscardAt => Table.Centre + new Vector3(0.45f, 0, 0.05f);
 
-	private readonly ImpactBank<Style> _impacts = new(Styles.Impact);
-	private readonly Scoreboard _wins = new();
+	protected override void LevelChanged(Difficulty difficulty) => _ai = new GinAi(1, difficulty, Random);
 
-	private GameSettings _settings = null!;
-	private Counter _game = new(5);
-	private Node3D _rig = null!;
-	private Camera3D _camera = null!;
-	private MeshInstance3D _board = null!;
-	private SoundPool _sound = null!;
-	private GameHud _hud = null!;
-	private IAdService _ads = null!;
-	private AdSchedule? _adSchedule;
-	private SpinControl _spin = null!;
-	private Flames? _fire;
-
-	private bool _demo;
-	private bool _quitAfterDemo;
-	private string? _clip;
-	private float _demoTimer;
-
-	public override void _Ready()
+	protected override void AddSettings()
 	{
-		DevLog.Tag = "gt";
-		AudioWatch.Attach(this, Title);
-		_settings = GameSettings.Load();
-		ReadDeveloperArgs();
-		AudioServer.SetBusMute(0, _settings.Muted);
-
-		_camera = new Camera3D { Position = new Vector3(0, 10f, 6.5f), Fov = 52, KeepAspect = Camera3D.KeepAspectEnum.Width };
-		AddChild(_camera);
-		_camera.LookAt(new Vector3(0, -0.4f, 0.3f));
-		Stage.Build(this, -Thickness, new Color("1a0f09"));
-		_rig = new Node3D();
-		AddChild(_rig);
-		_board = new MeshInstance3D
+		_pass = Hud.AddButton("Pass", true, Control.LayoutPreset.CenterBottom, -150, 150, -192, -128, 28);
+		_pass.Visible = false;
+		_pass.Pressed += () =>
 		{
-			Mesh = new BoxMesh { Size = new Vector3(7, Thickness, 7) },
-			Position = new Vector3(0, -Thickness / 2, 0),
-			MaterialOverride = Materials.For(Styles.BoardLook(_settings.Board)),
+			if (!Busy && _hand is { Phase: GinPhase.Offer, Current: 0 })
+				Run(Offer(0, take: false));
 		};
-		_rig.AddChild(_board);
-		Stage.WarmUp(this, -Thickness, Sparkle.Halo);
-
-		_sound = new SoundPool();
-		AddChild(_sound);
-		_adSchedule ??= new AdSchedule(_settings.GamesSinceAd);
-		var theme = HudTheme.Warm;
-		_ads = AdServices.Create(this, AdUnits, _demo, new PlaceholderAds { TextColor = theme.Text });
-
-		_hud = new GameHud(theme);
-		AddChild(_hud);
-		// The HUD saves Sound and Freeze the board itself; add a game's own Settings rows with
-		// _hud.AddToggle and _hud.AddChoice (keep their values in _settings.Extra).
-		_hud.Build(new HudOptions(Title, "Tap the board  ·  Drag sideways to spin"), _settings);
-		_hud.NewGamePressed += OnNewGamePressed;
-		_hud.RestartPressed += OnRestartPressed;
-		_hud.SetTutorial(Tutorial.Pages);
-		_hud.ModeChosen += (mode, difficulty) =>
+		_knock = Hud.AddButton("Knock", true, Control.LayoutPreset.CenterBottom, -150, 150, -192, -128, 28);
+		_knock.Visible = false;
+		_knock.Pressed += () =>
 		{
-			_settings.Mode = mode;
-			_settings.Difficulty = difficulty;
-			_settings.Save();
+			if (!Busy && _hand is { Phase: GinPhase.Discard, Current: 0 } hand && hand.BestDiscard(0) is { Deadwood: <= GinHand.KnockLimit } best)
+				Run(Knock(0, best.Discard));
 		};
-		_hud.BoardChosen += style =>
-		{
-			_settings.Board = style;
-			_settings.Save();
-			_board.MaterialOverride = Materials.For(Styles.BoardLook(style));
-		};
-		_hud.PiecesChosen += style =>
-		{
-			_settings.Pieces = style;
-			_settings.Save();
-		};
+	}
 
-		_spin = new SpinControl(_rig, () => !_settings.FreezeBoard);
-		// Freeze the board also turns it back to where it started.
-		_spin.Frozen = () => _settings.FreezeBoard;
-		_spin.Tapped += OnTapped;
-		RefreshUi();
-		if (_clip != null)
+	protected override async Task NewRound()
+	{
+		int round = Round;
+		_pass.Visible = _knock.Visible = false;
+		if (_match.IsOver)
+			_match = new GinMatch();
+		_ai = new GinAi(1, Settings.Difficulty, Random);
+		_nodes.Clear();
+		_hand = null;
+		SetScore();
+		var order = Deck.Shuffled(Random);
+		var nodes = await ShuffleOnTable(order);
+		if (round != Round)
+			return;
+		for (int i = 0; i < order.Count; i++)
+			_nodes[order[i]] = nodes[i];
+		var hand = new GinHand(order, _match.NextDealer);
+		_hand = hand;
+
+		// Ten each, from the non-dealer; then the up-card beside the stock.
+		await DealRound(nodes.Take(20).ToList(), Enumerable.Range(0, 20).Select(i => (1 - hand.Dealer + i) % 2).ToList(), spacing: 0.1f);
+		if (round != Round)
+			return;
+		var stock = hand.Stock.Select(c => _nodes[c]).ToList();
+		Tween? last = null;
+		for (int i = 0; i < stock.Count; i++)
+			last = CardMotion.Slide(stock[i], Dealer.InStack(StockAt, stock.Count - 1 - i), 0.2f);
+		await Await(last);
+		await Await(CardMotion.Fly(_nodes[hand.UpCard], FaceUpAt(DiscardAt), 0.3f, lift: 0.2f, landed: () => Sounds.PlaySlap(DiscardAt)));
+		await PickUpAll(p => hand.Hand(p).Select(c => _nodes[c]));
+		Arrange();
+		Hud.SetRestartVisible(true);
+		await Next();
+	}
+
+	/// <summary>Keeps your fan in meld order: each meld together, the deadwood last.</summary>
+	private void Arrange()
+	{
+		var best = _hand!.Best(0);
+		var order = best.Melds.SelectMany(m => m.OrderBy(c => c.Rank)).Concat(best.Deadwood.OrderBy(c => c.Rank).ThenBy(c => c.Suit)).Select(c => _nodes[c]);
+		Fans[0].Reorder(order);
+		Fans[0].Settle(0.18f);
+	}
+
+	private string DeadwoodNote()
+	{
+		var hand = _hand!;
+		if (hand.Phase == GinPhase.Discard && hand.Current == 0)
 		{
-			_hud.Visible = false;
-			_ = PlayClip(_clip);
+			var (dead, _) = hand.BestDiscard(0);
+			return dead == 0 ? "You have gin!" : dead <= GinHand.KnockLimit ? $"You can knock with {dead}." : $"Deadwood {hand.Best(0).DeadwoodPoints}.";
+		}
+		return $"Deadwood {hand.Best(0).DeadwoodPoints}.";
+	}
+
+	/// <summary>Hands over to whoever moves next: you get the buttons and taps, Rosie thinks and plays.</summary>
+	private async Task Next()
+	{
+		var hand = _hand!;
+		int round = Round;
+		SetScore();
+		if (hand.Phase == GinPhase.Over)
+		{
+			await EndHand();
 			return;
 		}
-		if (!_demo)
-			_hud.OfferTutorialOnce(_settings);
-		_hud.ApplyDevFlags();
-	}
-
-	public override void _UnhandledInput(InputEvent @event)
-	{
-		if (!_hud.MenuOpen)
-			_spin.HandleInput(@event);
-	}
-
-	/// <summary>A tap on the board: a knock in the board's material, sparks on the last one.</summary>
-	private void OnTapped(Vector2 screen)
-	{
-		if (_game.IsDone)
-			return;
-		var from = _camera.ProjectRayOrigin(screen);
-		var direction = _camera.ProjectRayNormal(screen);
-		if (direction.Y > -0.01f)
-			return;
-		var hit = from + direction * (-from.Y / direction.Y);
-		var local = _rig.ToLocal(hit);
-		if (Mathf.Abs(local.X) > 3.5f || Mathf.Abs(local.Z) > 3.5f)
-			return;
-		_hud.HideHint();
-		_game.Tap();
-		_sound.PlayImpact(_impacts.Random(_settings.Board), hit, 1f, Styles.GainDb(_settings.Board));
-		if (_game.IsDone)
+		if (hand.Current == 1 || Demo)
 		{
-			_wins.Win(first: true);
-			Sparkle.Burst(_rig, local + new Vector3(0, 0.3f, 0));
-			// The winner's fire: in a real game, set the winning pieces alight.
-			_fire = Flames.SetAlight(_rig, local, new[] { _board }, radius: 0.6f, size: 1.4f, withLight: true);
-		}
-		RefreshUi();
-	}
-
-	private void OnNewGamePressed()
-	{
-		bool adDue = _adSchedule!.GameFinished();
-		_settings.GamesSinceAd = _adSchedule.GamesSinceAd;
-		_settings.Save();
-		if (adDue)
-		{
-			DevLog.Write("ad: between-games interstitial");
-			_ads.ShowInterstitial(StartGame);
-		}
-		else
-		{
-			StartGame();
-		}
-	}
-
-	private void StartGame()
-	{
-		_fire?.Extinguish();
-		_fire = null;
-		_board.MaterialOverlay = null;
-		_game = new Counter(5);
-		RefreshUi();
-	}
-
-	/// <summary>
-	/// Start over mid-game. Against the computer it counts as resigning (a loss) unless the player
-	/// watches an ad; between two players it just asks first.
-	/// </summary>
-	private void OnRestartPressed()
-	{
-		if (_game.IsDone || _game.Count == 0)
-		{
-			StartGame();
+			Busy = true;
+			_pass.Visible = _knock.Visible = false;
+			await Pause(0.8f);
+			if (round != Round)
+				return;
+			await ComputerMove(hand.Current);
 			return;
 		}
-		_hud.AskRestart(_settings.Mode == GameMode.PlayerVsComputer && !_demo, countLoss =>
+		Busy = false;
+		_pass.Visible = hand.Phase == GinPhase.Offer;
+		_knock.Visible = false;
+		switch (hand.Phase)
 		{
-			if (countLoss)
-				_wins.Win(first: false);
-			StartGame();
-		}, then => _ads.ShowRewarded(rewarded: then, closed: () => { }));
-	}
-
-	/// <summary>
-	/// Plays one scripted scene for the tutorial (with --clip=name), then quits; the HUD is hidden
-	/// so the clip shows only the board. Record them with addons/renegade_core/tools/Record-Clips.ps1.
-	/// </summary>
-	private async System.Threading.Tasks.Task PlayClip(string clip)
-	{
-		_settings.Muted = false;
-		await ToSignal(GetTree().CreateTimer(0.8), SceneTreeTimer.SignalName.Timeout);
-		switch (clip)
-		{
-			default:
-				for (int i = 0; i < 5; i++)
-				{
-					OnTapped(GetViewport().GetVisibleRect().Size / 2);
-					await ToSignal(GetTree().CreateTimer(0.6), SceneTreeTimer.SignalName.Timeout);
-				}
+			case GinPhase.Offer:
+				Hud.SetStatus($"Take the up-card (tap it), or pass. {DeadwoodNote()}", Bright);
+				break;
+			case GinPhase.Draw:
+				Hud.SetStatus($"Your turn: tap the stock or the discard pile. {DeadwoodNote()}", Bright);
+				break;
+			case GinPhase.Discard:
+				var (dead, _) = hand.BestDiscard(0);
+				_knock.Visible = dead <= GinHand.KnockLimit;
+				_knock.Text = dead == 0 ? "Gin!" : "Knock";
+				Hud.SetStatus($"Tap a card to discard it. {DeadwoodNote()}", Bright);
 				break;
 		}
-		await ToSignal(GetTree().CreateTimer(2.0), SceneTreeTimer.SignalName.Timeout);
-		GetTree().Quit();
 	}
 
-	private void RefreshUi()
+	private async Task ComputerMove(int p)
 	{
-		_hud.SetScore($"Games {_wins.First}");
-		_hud.SetNewGameVisible(_game.IsDone);
-		_hud.SetRestartVisible(!_game.IsDone);
-		_hud.SetStatus(_game.IsDone ? "Done!" : $"Knock {_game.Count} of {_game.Target}", new Color("fff3e0"));
-		if (_game.IsDone && _demo && _quitAfterDemo && _wins.First >= 5)
-			GetTree().Quit();
-	}
-
-	public override void _Process(double delta)
-	{
-		float dt = (float)delta;
-		_spin.Process(dt);
-		if (!_demo)
-			return;
-		_demoTimer += dt;
-		if (_demoTimer < 0.3f)
-			return;
-		_demoTimer = 0f;
-		if (_game.IsDone)
-			OnNewGamePressed();
-		else
-			OnTapped(GetViewport().GetVisibleRect().Size / 2);
-	}
-
-	/// <summary>
-	/// Developer flags after `--` (or in user://dev_args.txt on a phone): `--log`, `--demo`,
-	/// `--quit-after-demo`, `--games-since-ad=4`, `--clip=knock` (plays a tutorial clip and quits),
-	/// plus the HUD's `--tutorial=N` and `--settings`. Add the game's own flags here.
-	/// </summary>
-	private void ReadDeveloperArgs()
-	{
-		foreach (var (name, value) in DevArgs.Read())
+		var hand = _hand!;
+		var ai = p == 1 ? _ai : new GinAi(0, Renegade.Core.Difficulty.Medium, Random);
+		switch (hand.Phase)
 		{
-			switch (name)
+			case GinPhase.Offer:
+				await Offer(p, ai.WantsDiscard(hand));
+				return;
+			case GinPhase.Draw:
+				await DrawCard(p, fromPile: ai.WantsDiscard(hand));
+				return;
+			case GinPhase.Discard:
+				if (ai.KnockWith(hand) is { } knock)
+					await Knock(p, knock);
+				else
+					await Throw(p, ai.ChooseDiscard(hand));
+				return;
+		}
+	}
+
+	private async Task Offer(int p, bool take)
+	{
+		var hand = _hand!;
+		Busy = true;
+		_pass.Visible = false;
+		if (take)
+		{
+			Hud.SetStatus(p == 0 ? "You take the up-card." : "Rosie takes the up-card.", Muted);
+			var card = hand.TopDiscard!.Value;
+			hand.Offer(take: true);
+			if (p == 0)
+				_ai.TheyTook(card);
+			await IntoFan(p, new[] { _nodes[card] });
+			if (p == 0)
+				Arrange();
+		}
+		else
+		{
+			if (p == 0)
+				_ai.TheyRefused(hand.TopDiscard!.Value);
+			Say(p, p == 1 ? "Pass." : null);
+			Hud.SetStatus(p == 0 ? "You pass." : "Rosie passes.", Muted);
+			hand.Offer(take: false);
+			await Pause(0.6f);
+			SayNone();
+		}
+		await Next();
+	}
+
+	private async Task DrawCard(int p, bool fromPile)
+	{
+		var hand = _hand!;
+		Busy = true;
+		var top = hand.TopDiscard;
+		var card = fromPile ? hand.DrawDiscard() : hand.DrawStock();
+		if (p == 0)
+		{
+			if (fromPile)
+				_ai.TheyTook(card);
+			else if (top is { } passed)
+				_ai.TheyRefused(passed);
+		}
+		Hud.SetStatus(fromPile ? (p == 0 ? "You take the discard." : $"Rosie takes the {Describe(card)}.") : (p == 0 ? "You draw from the stock." : "Rosie draws from the stock."), Muted);
+		await IntoFan(p, new[] { _nodes[card] });
+		if (p == 0)
+			Arrange();
+		await Next();
+	}
+
+	private async Task Throw(int p, Card card)
+	{
+		var hand = _hand!;
+		Busy = true;
+		_knock.Visible = false;
+		hand.Discard(card);
+		var target = FaceUpAt(DiscardAt + Vector3.Up * (0.004f * hand.DiscardPile.Count), ((float)Random.NextDouble() - 0.5f) * 0.3f);
+		await PlayToTable(p, _nodes[card], target);
+		if (p == 0)
+			Arrange();
+		Hud.SetStatus(p == 0 ? $"You discard the {Describe(card)}." : $"Rosie discards the {Describe(card)}.", Muted);
+		await Next();
+	}
+
+	private async Task Knock(int p, Card discard)
+	{
+		var hand = _hand!;
+		Busy = true;
+		_knock.Visible = false;
+		var result = hand.Knock(discard);
+		await PlayToTable(p, _nodes[discard], FaceDownAt(DiscardAt + Vector3.Up * (0.004f * hand.DiscardPile.Count), 0.2f));
+		Say(p, result.Gin ? "Gin!" : "Knock!");
+		await Pause(0.8f);
+		await Next();
+	}
+
+	/// <summary>Both hands go down face up in their melds, the defender's lay-offs join the knocker's melds, and the hand is scored.</summary>
+	private async Task EndHand()
+	{
+		var hand = _hand!;
+		var result = hand.Result!;
+		Busy = true;
+		_pass.Visible = _knock.Visible = false;
+		SayNone();
+		_match.Record(hand);
+		if (result.Drawn)
+		{
+			Hud.SetStatus("Only two cards left in the stock: this hand is a draw.", Bright);
+			await Pause(0.5f);
+			Finish("Only two cards left in the stock: this hand is a draw.", -1);
+			SetScore();
+			return;
+		}
+		int knocker = result.Knocker, defender = 1 - knocker;
+		var knockMelds = result.KnockerHand.Melds.Select(m => m.ToList()).ToList();
+		foreach (var (card, meld) in result.LaidOff)
+			knockMelds[meld].Add(card);
+		await Spread(knocker, knockMelds.Select(m => (IReadOnlyList<Card>)m.Where(c => !result.LaidOff.Any(l => l.Card == c)).ToList()).ToList(), result.KnockerHand.Deadwood);
+		await Spread(defender, result.DefenderHand.Melds, result.DefenderHand.Deadwood);
+		// Lay-offs: the defender's cards that fit the knocker's melds slide onto them.
+		foreach (var (card, meld) in result.LaidOff)
+		{
+			var group = knockMelds[meld];
+			int i = group.IndexOf(card);
+			await Await(CardMotion.Fly(_nodes[card], SpreadSlot(knocker, meld, i), 0.3f, lift: 0.2f, landed: () => Sounds.PlaySlap(_nodes[card].GlobalPosition)));
+		}
+		string who = knocker == 0 ? "You" : "Rosie";
+		string winner = result.Winner == 0 ? "you" : "Rosie";
+		string how = result.Gin ? $"{who} went gin! +{result.Points} to {winner}."
+			: result.Undercut ? $"Undercut! {(defender == 0 ? "You" : "Rosie")} had {result.DefenderHand.DeadwoodPoints - result.LaidOff.Sum(l => Gin.Points(l.Card))} or less: +{result.Points} to {winner}."
+			: $"{who} knocked with {result.KnockerHand.DeadwoodPoints}: +{result.Points} to {winner}.";
+		Sparkle.Burst(this, (result.Winner == 0 ? Table.Centre + new Vector3(0, 0.2f, 0.9f) : Table.Centre + new Vector3(0, 0.2f, -1.0f)));
+		SetScore();
+		if (_match.IsOver)
+		{
+			int w = _match.Winner;
+			Finish($"{how} {(w == 0 ? "You win the match" : "Rosie wins the match")}, {_match.Total(w)} to {_match.Total(1 - w)}!", w,
+				hand.Hand(w).Select(c => _nodes[c]), w == 0 ? Table.Centre + new Vector3(0, 0, 0.9f) : Table.Centre + new Vector3(0, 0, -1f));
+		}
+		else
+		{
+			Finish(how, -1);
+		}
+	}
+
+	/// <summary>Where a card in a laid-out meld goes: a row in front of each player, the melds side by side.</summary>
+	private Transform3D SpreadSlot(int p, int group, int index, int groups = 4)
+	{
+		float z = p == 0 ? 0.95f : -1.15f;
+		float x = -1.6f + group * 0.95f + index * 0.17f;
+		return FaceUpAt(new Vector3(x, CardTable.FeltY + 0.004f * (index + 1), z + (group % 2) * 0.05f));
+	}
+
+	private async Task Spread(int p, IReadOnlyList<IReadOnlyList<Card>> melds, IReadOnlyList<Card> deadwood)
+	{
+		var cards = new List<Card3D>();
+		var targets = new List<Transform3D>();
+		for (int m = 0; m < melds.Count; m++)
+			for (int i = 0; i < melds[m].Count; i++)
 			{
-				case "--log":
-					DevLog.Enabled = true;
-					break;
-				case "--demo":
-					_demo = true;
-					_settings.Muted = false;
-					break;
-				case "--quit-after-demo":
-					_quitAfterDemo = true;
-					break;
-				case "--games-since-ad":
-					_adSchedule = new AdSchedule(int.Parse(value));
-					break;
-				case "--clip":
-					_clip = value;
-					break;
+				cards.Add(_nodes[melds[m][i]]);
+				targets.Add(SpreadSlot(p, m, i));
 			}
+		for (int i = 0; i < deadwood.Count; i++)
+		{
+			cards.Add(_nodes[deadwood[i]]);
+			targets.Add(SpreadSlot(p, melds.Count, i));
+		}
+		foreach (var card in cards)
+			Fans[p].Remove(card);
+		Tween? last = null;
+		for (int i = 0; i < cards.Count; i++)
+		{
+			var card = cards[i];
+			last = CardMotion.Fly(card, targets[i], 0.4f, lift: 0.3f, delay: i * 0.05f, landed: i % 3 == 0 ? () => Sounds.PlaySlap(card.GlobalPosition) : null);
+		}
+		await Await(last);
+	}
+
+	private static string Describe(Card card) => $"{Card.RankName(card.Rank).ToLowerInvariant()} of {card.Suit.ToString().ToLowerInvariant()}";
+
+	private void SetScore()
+	{
+		Hud.SetScore($"Match to 100: you {_match.Score[0]} · {_match.Score[1]} Rosie   ·   Wins {Wins.First}–{Wins.Second}");
+	}
+
+	protected override void Tapped(Vector3 origin, Vector3 direction, Vector2 screen)
+	{
+		if (_hand is not { Current: 0 } hand)
+			return;
+		switch (hand.Phase)
+		{
+			case GinPhase.Offer:
+				if (hand.TopDiscard is { } up && _nodes[up].Hit(origin, direction) != null)
+					Run(Offer(0, take: true));
+				break;
+			case GinPhase.Draw:
+				if (hand.TopDiscard is { } top && _nodes[top].Hit(origin, direction) != null)
+					Run(DrawCard(0, fromPile: true));
+				else if (HitCard(hand.Stock.Select(c => _nodes[c]), origin, direction) != null)
+					Run(DrawCard(0, fromPile: false));
+				break;
+			case GinPhase.Discard:
+				if (Fans[0].At(origin, direction) is { } card)
+				{
+					if (card.Card == hand.TakenFromPile)
+					{
+						Hud.SetStatus("You can't throw back the card you just took. Discard another.", Bright);
+						return;
+					}
+					Hud.HideHint();
+					Run(Throw(0, card.Card));
+				}
+				break;
 		}
 	}
 }

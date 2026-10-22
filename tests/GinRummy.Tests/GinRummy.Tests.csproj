@@ -9,6 +9,8 @@
     <Compile Include="../../src/Core/**/*.cs" Link="Core/%(RecursiveDir)%(Filename)%(Extension)" />
     <!-- The shared library's engine-free code (Difficulty, Scoreboard, AdSchedule...). -->
     <Compile Include="../../addons/renegade_core/pure/**/*.cs" Link="Shared/%(RecursiveDir)%(Filename)%(Extension)" />
+    <!-- The card kit's engine-free code (Card, Deck). -->
+    <Compile Include="../../addons/renegade_cards/pure/**/*.cs" Link="Cards/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

@@ -16,6 +16,6 @@ jobs:
         with:
           dotnet-version: 8.0.x
       - name: Build game assembly
-        run: dotnet build GameTemplate.csproj
+        run: dotnet build GinRummy.csproj
       - name: Run rules tests
-        run: dotnet test tests/GameTemplate.Tests
+        run: dotnet test tests/GinRummy.Tests

@@ -1,4 +1,4 @@
-# Game Template
+# Gin Rummy
 
 Starting point for a new Renegade Games title: a Godot 4.7 C# project for Android phones with
 everything Counter Fire needed already wired up.
@@ -25,11 +25,11 @@ the icon in `assets/icon/*.svg` (render with `tools/Render-Icons.ps1`).
 
 ## Run
 
-- Desktop: open in Godot, or F5 in VS Code ("Play GameTemplate").
+- Desktop: open in Godot, or F5 in VS Code ("Play GinRummy").
 - Developer flags after `--`: `--log`, `--demo`, `--quit-after-demo`, `--games-since-ad=4`.
   On a phone, push them as lines of `files/dev_args.txt` (see renegade-core's playbook).
 - Android build (first create the output folder: `mkdir build/android`):
-  `Godot.exe --headless --path . --install-android-build-template --export-debug "Android" build/android/GameTemplate.apk`
+  `Godot.exe --headless --path . --install-android-build-template --export-debug "Android" build/android/GinRummy.apk`
 
 ## Layout
 

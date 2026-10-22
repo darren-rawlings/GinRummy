@@ -1,3 +1,6 @@
 [submodule "addons/renegade_core"]
 	path = addons/renegade_core
 	url = https://github.com/darren-rawlings/renegade-core
+[submodule "addons/renegade_cards"]
+	path = addons/renegade_cards
+	url = https://github.com/darren-rawlings/renegade-cards
