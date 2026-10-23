@@ -24,6 +24,7 @@ public partial class Main : CardGame
 	private GinAi _ai = null!;
 	private Button _pass = null!;
 	private Button _knock = null!;
+	private Button _boast = null!;
 
 	protected override string Title => "Gin Rummy";
 	protected override string Hint => "Draw, then tap a card to discard it";
@@ -37,8 +38,22 @@ public partial class Main : CardGame
 
 	protected override void LevelChanged(Difficulty difficulty) => _ai = new GinAi(1, difficulty, Random);
 
+	/// <summary>The optional rules chosen in Settings.</summary>
+	private GinRules Rules => new(Flag("okla"), Flag("cyclic"), Flag("rainbow"), Flag("tedesco"), Flag("boast"), Flag("jokers"), HandsToWin);
+
+	/// <summary>Gin Pro: hands a winner must also have won (0 for none).</summary>
+	private int HandsToWin => Settings.Extra.TryGetValue("gpro", out var h) && int.TryParse(h, out int n) ? n : 0;
+
 	/// <summary>The points a match is played to (Settings › Play to).</summary>
 	private int Target => Settings.Extra.TryGetValue("target", out var t) && int.TryParse(t, out int n) && n > 0 ? n : 100;
+
+	/// <summary>`--variants=okla,jokers,boast` (any of okla, cyclic, rainbow, tedesco, boast, jokers) for checks.</summary>
+	protected override void DevArg(string name, string value)
+	{
+		if (name == "--variants")
+			foreach (var key in value.Split(','))
+				Settings.Extra[key.Trim()] = "on";
+	}
 
 	protected override void AddSettings()
 	{
@@ -46,6 +61,30 @@ public partial class Main : CardGame
 		Hud.AddChoice("Play to", targets.Select(t => t.ToString()).ToArray(), System.Math.Max(0, System.Array.IndexOf(targets, Target)), choice =>
 		{
 			Settings.Extra["target"] = targets[choice].ToString();
+			Settings.Save();
+			if (!InProgress)
+				Run(StartRound());
+		});
+		// The variants Gin Rummy Palace offers; each takes effect from the next deal.
+		void Variant(string label, string key)
+		{
+			Hud.AddToggle(label, Flag(key), on =>
+			{
+				SetFlag(key, on);
+				if (!InProgress)
+					Run(StartRound());
+			});
+		}
+		Variant("Oklahoma (bottom card sets the knock)", "okla");
+		Variant("Cyclic runs (Q-K-A, K-A-2)", "cyclic");
+		Variant("Rainbow runs", "rainbow");
+		Variant("Tedesco", "tedesco");
+		Variant("Boasting", "boast");
+		Variant("Jokers (three, wild)", "jokers");
+		var pro = new[] { 0, 3, 5 };
+		Hud.AddChoice("Gin Pro: hands to win", new[] { "Off", "3", "5" }, System.Math.Max(0, System.Array.IndexOf(pro, HandsToWin)), choice =>
+		{
+			Settings.Extra["gpro"] = pro[choice].ToString();
 			Settings.Save();
 			if (!InProgress)
 				Run(StartRound());
@@ -61,28 +100,39 @@ public partial class Main : CardGame
 		_knock.Visible = false;
 		_knock.Pressed += () =>
 		{
-			if (!Busy && _hand is { Phase: GinPhase.Discard, Current: 0 } hand && hand.BestDiscard(0) is { Deadwood: <= GinHand.KnockLimit } best)
+			if (!Busy && _hand is { Phase: GinPhase.Discard, Current: 0 } hand && hand.BestDiscard(0) is var best && best.Deadwood <= hand.KnockLimit && hand.CanKnock(best.Discard))
 				Run(Knock(0, best.Discard));
+		};
+		_boast = Hud.AddButton("Boast", false, Control.LayoutPreset.BottomRight, -200, -20, -192, -128, 24);
+		_boast.Visible = false;
+		_boast.Pressed += () =>
+		{
+			if (Busy || _hand is not { Phase: GinPhase.Discard, Current: 0, CanBoast: true } hand)
+				return;
+			hand.Boast();
+			Say(0, "I'll knock within three turns!", 1);
+			_boast.Visible = _knock.Visible = false;
 		};
 	}
 
 	protected override async Task NewRound()
 	{
 		int round = Round;
-		_pass.Visible = _knock.Visible = false;
+		_pass.Visible = _knock.Visible = _boast.Visible = false;
 		if (_match.IsOver || _match.Hands == 0)
-			_match = new GinMatch(Target);
+			_match = new GinMatch(Target, HandsToWin);
+		var rules = Rules;
 		_ai = new GinAi(1, Settings.Difficulty, Random);
 		_nodes.Clear();
 		_hand = null;
 		SetScore();
-		var order = Deck.Shuffled(Random);
+		var order = Gin.Pack(rules, Random);
 		var nodes = await ShuffleOnTable(order);
 		if (round != Round)
 			return;
 		for (int i = 0; i < order.Count; i++)
 			_nodes[order[i]] = nodes[i];
-		var hand = new GinHand(order, _match.NextDealer);
+		var hand = new GinHand(order, _match.NextDealer, rules);
 		_hand = hand;
 
 		// Ten each, from the non-dealer; then the up-card beside the stock.
@@ -93,6 +143,12 @@ public partial class Main : CardGame
 		Tween? last = null;
 		for (int i = 0; i < stock.Count; i++)
 			last = CardMotion.Slide(stock[i], Dealer.InStack(StockAt, stock.Count - 1 - i), 0.2f);
+		// Oklahoma: the bottom card lies face up across the foot of the stock: it sets the knock.
+		if (hand.OklahomaCard is { } bottom)
+		{
+			last = CardMotion.Slide(_nodes[bottom], FaceUpAt(StockAt + new Vector3(0, 0, 0.36f), Mathf.Pi / 2), 0.3f);
+			News(hand.KnockLimit == 0 ? $"Oklahoma: the bottom card is the {bottom}, so this hand is gin only." : $"Oklahoma: the bottom card is the {bottom}: knock with {hand.KnockLimit} or less.");
+		}
 		await Await(last);
 		await Await(CardMotion.Fly(_nodes[hand.UpCard], FaceUpAt(DiscardAt), 0.3f, lift: 0.2f, landed: () => Sounds.PlaySlap(DiscardAt)));
 		await PickUpAll(p => hand.Hand(p).Select(c => _nodes[c]));
@@ -116,7 +172,7 @@ public partial class Main : CardGame
 		if (hand.Phase == GinPhase.Discard && hand.Current == 0)
 		{
 			var (dead, _) = hand.BestDiscard(0);
-			return dead == 0 ? "You have gin!" : dead <= GinHand.KnockLimit ? $"You can knock with {dead}." : $"Deadwood {hand.Best(0).DeadwoodPoints}.";
+			return dead == 0 ? "You have gin!" : dead <= hand.KnockLimit ? $"You can knock with {dead}." : $"Deadwood {hand.Best(0).DeadwoodPoints}.";
 		}
 		return $"Deadwood {hand.Best(0).DeadwoodPoints}.";
 	}
@@ -132,10 +188,13 @@ public partial class Main : CardGame
 			await EndHand();
 			return;
 		}
+		ShowTurn(hand.Current);
 		if (hand.Current == 1 || Demo)
 		{
+			if (hand.Current == 1)
+				Hud.SetStatus("Rosie's turn.", Muted);
 			Busy = true;
-			_pass.Visible = _knock.Visible = false;
+			_pass.Visible = _knock.Visible = _boast.Visible = false;
 			await Pause(0.8f);
 			if (round != Round)
 				return;
@@ -144,7 +203,7 @@ public partial class Main : CardGame
 		}
 		Busy = false;
 		_pass.Visible = hand.Phase == GinPhase.Offer;
-		_knock.Visible = false;
+		_knock.Visible = _boast.Visible = false;
 		switch (hand.Phase)
 		{
 			case GinPhase.Offer:
@@ -154,8 +213,9 @@ public partial class Main : CardGame
 				Hud.SetStatus($"Your turn: tap the stock or the discard pile. {DeadwoodNote()}", Bright);
 				break;
 			case GinPhase.Discard:
-				var (dead, _) = hand.BestDiscard(0);
-				_knock.Visible = dead <= GinHand.KnockLimit;
+				var (dead, discard) = hand.BestDiscard(0);
+				_knock.Visible = dead <= hand.KnockLimit && hand.CanKnock(discard);
+				_boast.Visible = hand.CanBoast && !_knock.Visible;
 				_knock.Text = dead == 0 ? "Gin!" : "Knock";
 				Hud.SetStatus($"Tap a card to discard it. {DeadwoodNote()}", Bright);
 				break;
@@ -175,6 +235,12 @@ public partial class Main : CardGame
 				await DrawCard(p, fromPile: ai.WantsDiscard(hand));
 				return;
 			case GinPhase.Discard:
+				if (ai.WantsBoast(hand))
+				{
+					hand.Boast();
+					Say(p, "I'll knock within three turns!", 1 - p);
+					await Pause(0.8f);
+				}
 				if (ai.KnockWith(hand) is { } knock)
 					await Knock(p, knock);
 				else
@@ -190,7 +256,7 @@ public partial class Main : CardGame
 		_pass.Visible = false;
 		if (take)
 		{
-			Hud.SetStatus(p == 0 ? "You take the up-card." : "Rosie takes the up-card.", Muted);
+			News(p == 0 ? "You take the up-card." : "Rosie takes the up-card.");
 			var card = hand.TopDiscard!.Value;
 			hand.Offer(take: true);
 			if (p == 0)
@@ -203,8 +269,7 @@ public partial class Main : CardGame
 		{
 			if (p == 0)
 				_ai.TheyRefused(hand.TopDiscard!.Value);
-			Say(p, p == 1 ? "Pass." : null);
-			Hud.SetStatus(p == 0 ? "You pass." : "Rosie passes.", Muted);
+			Say(p, "Pass.");
 			hand.Offer(take: false);
 			await Pause(0.6f);
 			SayNone();
@@ -225,7 +290,7 @@ public partial class Main : CardGame
 			else if (top is { } passed)
 				_ai.TheyRefused(passed);
 		}
-		Hud.SetStatus(fromPile ? (p == 0 ? "You take the discard." : $"Rosie takes the {Describe(card)}.") : (p == 0 ? "You draw from the stock." : "Rosie draws from the stock."), Muted);
+		News(fromPile ? (p == 0 ? "You take the discard." : $"Rosie takes the {Describe(card)}.") : (p == 0 ? "You draw from the stock." : "Rosie draws from the stock."));
 		await IntoFan(p, new[] { _nodes[card] });
 		if (p == 0)
 			Arrange();
@@ -236,13 +301,13 @@ public partial class Main : CardGame
 	{
 		var hand = _hand!;
 		Busy = true;
-		_knock.Visible = false;
+		_knock.Visible = _boast.Visible = false;
 		hand.Discard(card);
 		var target = FaceUpAt(DiscardAt + Vector3.Up * (0.004f * hand.DiscardPile.Count), ((float)Random.NextDouble() - 0.5f) * 0.3f);
 		await PlayToTable(p, _nodes[card], target);
 		if (p == 0)
 			Arrange();
-		Hud.SetStatus(p == 0 ? $"You discard the {Describe(card)}." : $"Rosie discards the {Describe(card)}.", Muted);
+		News(p == 0 ? $"You discard the {Describe(card)}." : $"Rosie discards the {Describe(card)}.");
 		await Next();
 	}
 
@@ -250,7 +315,7 @@ public partial class Main : CardGame
 	{
 		var hand = _hand!;
 		Busy = true;
-		_knock.Visible = false;
+		_knock.Visible = _boast.Visible = false;
 		var result = hand.Knock(discard);
 		await PlayToTable(p, _nodes[discard], FaceDownAt(DiscardAt + Vector3.Up * (0.004f * hand.DiscardPile.Count), 0.2f));
 		Say(p, result.Gin ? "Gin!" : "Knock!");
@@ -264,7 +329,7 @@ public partial class Main : CardGame
 		var hand = _hand!;
 		var result = hand.Result!;
 		Busy = true;
-		_pass.Visible = _knock.Visible = false;
+		_pass.Visible = _knock.Visible = _boast.Visible = false;
 		SayNone();
 		_match.Record(hand);
 		if (result.Drawn)
@@ -293,6 +358,9 @@ public partial class Main : CardGame
 		string how = result.Gin ? $"{who} went gin! +{result.Points} to {winner}."
 			: result.Undercut ? $"Undercut! {(defender == 0 ? "You" : "Rosie")} had {result.DefenderHand.DeadwoodPoints - result.LaidOff.Sum(l => Gin.Points(l.Card))} or less: +{result.Points} to {winner}."
 			: $"{who} knocked with {result.KnockerHand.DeadwoodPoints}: +{result.Points} to {winner}.";
+		if (result.BonusTo >= 0)
+			how += result.BonusTo == hand.Boaster ? $" Boast made: +{result.Bonus} more." : $" The boast failed: +{result.Bonus} to {(result.BonusTo == 0 ? "you" : "Rosie")}.";
+		News(how);
 		Sparkle.Burst(this, (result.Winner == 0 ? Table.Centre + new Vector3(0, 0.2f, 0.9f) : Table.Centre + new Vector3(0, 0.2f, -1.0f)));
 		SetScore();
 		if (_match.IsOver)

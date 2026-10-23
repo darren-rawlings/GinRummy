@@ -131,7 +131,7 @@ public class HandTests
 			if (!result.Drawn)
 			{
 				Assert.True(result.Points > 0 || result.Undercut);
-				Assert.True(result.KnockerHand.DeadwoodPoints <= GinHand.KnockLimit);
+				Assert.True(result.KnockerHand.DeadwoodPoints <= hand.KnockLimit);
 				if (result.Gin)
 					Assert.Equal(0, result.KnockerHand.DeadwoodPoints);
 			}
@@ -177,5 +177,127 @@ public class MatchScoringTests
 				Assert.Equal(before + r.Points + GinMatch.BoxBonus, match.Score.Sum());
 		}
 		Assert.True(match.Score.Max() >= 50);
+	}
+}
+
+public class VariantTests
+{
+	private static Card C(int rank, Suit suit) => new(rank, suit);
+
+	private static void PlayOut(GinHand hand, GinAi[] ais)
+	{
+		for (int turns = 0; hand.Phase != GinPhase.Over && turns < 300; turns++)
+		{
+			var ai = ais[hand.Current];
+			if (hand.Phase == GinPhase.Offer)
+				hand.Offer(ai.WantsDiscard(hand));
+			else if (hand.Phase == GinPhase.Draw)
+			{
+				if (ai.WantsDiscard(hand))
+					hand.DrawDiscard();
+				else
+					hand.DrawStock();
+			}
+			else
+			{
+				if (ai.WantsBoast(hand))
+					hand.Boast();
+				if (ai.KnockWith(hand) is { } knock)
+					hand.Knock(knock);
+				else
+					hand.Discard(ai.ChooseDiscard(hand));
+			}
+		}
+	}
+
+	[Fact]
+	public void CyclicRunsGoRoundTheCorner()
+	{
+		var qka = new[] { C(Card.Queen, Suit.Hearts), C(Card.King, Suit.Hearts), C(Card.Ace, Suit.Hearts) };
+		Assert.False(Gin.IsRun(qka));
+		Assert.True(Gin.IsRun(qka, new GinRules(Cyclic: true)));
+		Assert.True(Gin.IsRun(new[] { C(Card.King, Suit.Clubs), C(Card.Ace, Suit.Clubs), C(2, Suit.Clubs) }, new GinRules(Cyclic: true)));
+	}
+
+	[Fact]
+	public void RainbowRunsAlternateColoursAcrossFourSuits()
+	{
+		var rules = new GinRules(Rainbow: true);
+		var rainbow = new[] { C(Card.Ace, Suit.Hearts), C(2, Suit.Spades), C(3, Suit.Diamonds), C(4, Suit.Clubs) };
+		Assert.True(Gin.IsRainbow(rainbow, rules));
+		Assert.False(Gin.IsRainbow(rainbow));
+		Assert.False(Gin.IsRainbow(new[] { C(Card.Ace, Suit.Hearts), C(2, Suit.Diamonds), C(3, Suit.Spades), C(4, Suit.Clubs) }, rules));
+		var hand = rainbow.Concat(new[] { C(9, Suit.Clubs) }).ToList();
+		Assert.Equal(9, Gin.Best(hand, rules).DeadwoodPoints);
+	}
+
+	[Fact]
+	public void JokersStandInForAnyCardAndCountFifteenLoose()
+	{
+		var rules = new GinRules(Jokers: true);
+		var joker = Gin.Jokers[0];
+		Assert.True(Gin.IsSet(new[] { C(7, Suit.Clubs), C(7, Suit.Hearts), joker }, rules));
+		Assert.True(Gin.IsRun(new[] { C(4, Suit.Spades), joker, C(6, Suit.Spades) }, rules));
+		Assert.False(Gin.IsRun(new[] { C(4, Suit.Spades), joker, C(6, Suit.Spades) }));
+		Assert.Equal(15, Gin.Points(joker));
+		var hand = new List<Card> { C(4, Suit.Spades), C(6, Suit.Spades), joker, C(Card.King, Suit.Hearts) };
+		Assert.Equal(10, Gin.Best(hand, rules).DeadwoodPoints);
+		Assert.Equal(55, Gin.Pack(rules, new Random(1)).Distinct().Count());
+	}
+
+	[Fact]
+	public void OklahomaSetsTheKnockLimitFromTheBottomCard()
+	{
+		var rules = new GinRules(Oklahoma: true);
+		var deck = Deck.Standard();
+		var seven = C(7, Suit.Diamonds);
+		deck.Remove(seven);
+		deck.Add(seven);
+		var hand = new GinHand(deck, 0, rules);
+		Assert.Equal(seven, hand.OklahomaCard);
+		Assert.Equal(7, hand.KnockLimit);
+		var aceDeck = Deck.Standard();
+		var ace = C(Card.Ace, Suit.Clubs);
+		aceDeck.Remove(ace);
+		aceDeck.Add(ace);
+		Assert.Equal(0, new GinHand(aceDeck, 0, rules).KnockLimit);
+	}
+
+	[Theory]
+	[InlineData(false, false, false, false, false, 0)]
+	[InlineData(true, true, true, false, false, 0)]
+	[InlineData(false, false, false, true, true, 0)]
+	[InlineData(false, true, false, false, true, 3)]
+	public void MatchesPlayOutUnderEveryVariant(bool oklahoma, bool cyclic, bool rainbow, bool tedesco, bool boasting, int handsToWin)
+	{
+		var rules = new GinRules(oklahoma, cyclic, rainbow, tedesco, boasting, Jokers: false, handsToWin);
+		var random = new Random(11);
+		var match = new GinMatch(100, handsToWin);
+		var ais = new[] { new GinAi(0, Difficulty.Hard, random), new GinAi(1, Difficulty.Medium, random) };
+		while (!match.IsOver && match.Hands < 80)
+		{
+			var hand = new GinHand(Gin.Pack(rules, random), match.NextDealer, rules);
+			PlayOut(hand, ais);
+			Assert.Equal(GinPhase.Over, hand.Phase);
+			match.Record(hand);
+		}
+		Assert.True(match.IsOver);
+		Assert.True(match.Boxes[match.Winner] >= handsToWin);
+	}
+
+	[Fact]
+	public void JokerMatchesPlayOut()
+	{
+		var rules = new GinRules(Jokers: true);
+		var random = new Random(12);
+		var match = new GinMatch(60);
+		var ais = new[] { new GinAi(0, Difficulty.Hard, random), new GinAi(1, Difficulty.Medium, random) };
+		while (!match.IsOver && match.Hands < 40)
+		{
+			var hand = new GinHand(Gin.Pack(rules, random), match.NextDealer, rules);
+			PlayOut(hand, ais);
+			match.Record(hand);
+		}
+		Assert.True(match.IsOver);
 	}
 }

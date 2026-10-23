@@ -34,8 +34,8 @@ public sealed class GinAi
 	/// <summary>Notes the other player passing a card by (drawing from the stock instead, or passing the up-card).</summary>
 	public void TheyRefused(Card card) => _theyRefused.Add(card);
 
-	private int DeadwoodWith(IReadOnlyList<Card> hand, Card add) =>
-		hand.Append(add).Select(drop => Gin.Best(hand.Append(add).Where(c => c != drop).ToList()).DeadwoodPoints).Min();
+	private static int DeadwoodWith(IReadOnlyList<Card> hand, Card add, GinRules rules) =>
+		hand.Append(add).Select(drop => Gin.Best(hand.Append(add).Where(c => c != drop).ToList(), rules).DeadwoodPoints).Min();
 
 	/// <summary>Whether to take the top discard (or the up-card on the first turn) rather than draw from the stock.</summary>
 	public bool WantsDiscard(GinHand hand)
@@ -44,12 +44,12 @@ public sealed class GinAi
 		if (top is not { } card)
 			return false;
 		var mine = hand.Hand(Player);
-		int now = Gin.Best(mine).DeadwoodPoints;
+		int now = Gin.Best(mine, hand.Rules).DeadwoodPoints;
 		if (Difficulty == Difficulty.Easy)
-			return Gin.Best(mine.Append(card).ToList()).Melds.Any(m => m.Contains(card));
-		int with = DeadwoodWith(mine, card);
+			return Gin.Best(mine.Append(card).ToList(), hand.Rules).Melds.Any(m => m.Contains(card));
+		int with = DeadwoodWith(mine, card, hand.Rules);
 		// Take it if it really helps (a meld, or a clear cut in deadwood).
-		return Gin.Best(mine.Append(card).ToList()).Melds.Any(m => m.Contains(card)) || with <= now - 4;
+		return Gin.Best(mine.Append(card).ToList(), hand.Rules).Melds.Any(m => m.Contains(card)) || with <= now - 4;
 	}
 
 	/// <summary>Which card to throw, in the Discard phase.</summary>
@@ -57,7 +57,7 @@ public sealed class GinAi
 	{
 		var mine = hand.Hand(Player);
 		var options = mine.Where(c => c != hand.TakenFromPile).ToList();
-		var scored = options.Select(c => (Card: c, Dead: Gin.Best(mine.Where(x => x != c).ToList()).DeadwoodPoints, Danger: Danger(c))).ToList();
+		var scored = options.Select(c => (Card: c, Dead: Gin.Best(mine.Where(x => x != c).ToList(), hand.Rules).DeadwoodPoints, Danger: Danger(c))).ToList();
 		if (Difficulty == Difficulty.Easy)
 			return scored.OrderBy(s => s.Dead).ThenByDescending(s => Gin.Points(s.Card)).First().Card;
 		int best = scored.Min(s => s.Dead);
@@ -87,13 +87,27 @@ public sealed class GinAi
 	public Card? KnockWith(GinHand hand)
 	{
 		var (dead, discard) = hand.BestDiscard(Player);
-		if (dead > GinHand.KnockLimit)
+		if (dead > hand.KnockLimit || !hand.CanKnock(discard))
 			return null;
-		if (dead == 0 || Difficulty == Difficulty.Easy)
+		// A boast is about to pay: knock now.
+		if (dead == 0 || Difficulty == Difficulty.Easy || hand.Boaster == Player)
 			return discard;
+		int limit = hand.KnockLimit;
 		if (Difficulty == Difficulty.Medium)
-			return dead <= 7 || hand.Stock.Count < 14 ? discard : null;
+			return dead <= Math.Min(7, limit) || hand.Stock.Count < 14 ? discard : null;
 		// Hard: knock low early, and hold out for gin only while the stock is deep and the hand close.
-		return dead <= 4 || hand.Stock.Count < 18 || dead <= 8 && hand.Stock.Count < 24 ? discard : null;
+		return dead <= Math.Min(4, limit) || hand.Stock.Count < 18 || dead <= Math.Min(8, limit) && hand.Stock.Count < 24 ? discard : null;
+	}
+
+	/// <summary>
+	/// Boasting: whether to announce a knock within three turns, when the hand is close but can't
+	/// knock yet and the stock is still deep (Medium and Hard, about half the time).
+	/// </summary>
+	public bool WantsBoast(GinHand hand)
+	{
+		if (!hand.CanBoast || Difficulty == Difficulty.Easy || hand.Stock.Count < 12)
+			return false;
+		int dead = hand.BestDiscard(Player).Deadwood;
+		return dead > hand.KnockLimit && dead <= hand.KnockLimit + 6 && _random.NextDouble() < 0.5;
 	}
 }

@@ -16,5 +16,7 @@ public static class Tutorial
 			"With 10 or less deadwood, press Knock: you score the difference between the deadwood counts, after Rosie lays her loose cards off on your melds. No deadwood at all is gin: 25 more, and no laying off. But if Rosie has as little as you, it's an undercut and she scores, plus 20."),
 		new TutorialPage("The match",
 			"Every hand won also scores a box bonus of 10. First to 100 wins the match (Settings › Play to changes the target)."),
+		new TutorialPage("Variants",
+			"Settings has the variants from Gin Rummy Palace: Oklahoma (the bottom card of the stock sets the most you may knock with; an ace means gin only), cyclic runs (Q-K-A), rainbow runs (four in a row of different suits, red and black in turn), Tedesco (aces count 15 against the defender), Boasting (promise to knock within three turns for a bonus), three wild jokers, and Gin Pro (a set number of hands to win as well as the points)."),
 	};
 }
