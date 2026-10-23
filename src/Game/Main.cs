@@ -361,13 +361,13 @@ public partial class Main : CardGame
 		if (result.BonusTo >= 0)
 			how += result.BonusTo == hand.Boaster ? $" Boast made: +{result.Bonus} more." : $" The boast failed: +{result.Bonus} to {(result.BonusTo == 0 ? "you" : "Rosie")}.";
 		News(how);
-		Sparkle.Burst(this, (result.Winner == 0 ? Table.Centre + new Vector3(0, 0.2f, 0.9f) : Table.Centre + new Vector3(0, 0.2f, -1.0f)));
+		Sparkle.Burst(this, RowAt(result.Winner) + Vector3.Up * 0.2f);
 		SetScore();
 		if (_match.IsOver)
 		{
 			int w = _match.Winner;
 			Finish($"{how} {(w == 0 ? "You win the match" : "Rosie wins the match")}, {_match.Total(w)} to {_match.Total(1 - w)}!", w,
-				hand.Hand(w).Select(c => _nodes[c]), w == 0 ? Table.Centre + new Vector3(0, 0, 0.9f) : Table.Centre + new Vector3(0, 0, -1f));
+				hand.Hand(w).Select(c => _nodes[c]), RowAt(w));
 		}
 		else
 		{
@@ -375,10 +375,16 @@ public partial class Main : CardGame
 		}
 	}
 
+	/// <summary>
+	/// The middle of the row each player lays their melds in: yours just above the top of your fan,
+	/// where you can see it; Rosie's in front of her place setting.
+	/// </summary>
+	private Vector3 RowAt(int p) => p == 0 ? new Vector3(0, CardTable.FeltY, Table.YourPlayZ) : Table.Pile[1] + new Vector3(0, 0, 0.95f);
+
 	/// <summary>Where a card in a laid-out meld goes: a row in front of each player, the melds side by side.</summary>
 	private Transform3D SpreadSlot(int p, int group, int index, int groups = 4)
 	{
-		float z = p == 0 ? 0.95f : -1.15f;
+		float z = RowAt(p).Z;
 		float x = -1.6f + group * 0.95f + index * 0.17f;
 		return FaceUpAt(new Vector3(x, CardTable.FeltY + 0.004f * (index + 1), z + (group % 2) * 0.05f));
 	}
