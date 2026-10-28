@@ -279,6 +279,7 @@ public partial class Main : CardGame
 
 	private async Task DrawCard(int p, bool fromPile)
 	{
+		ClipMoment("draw", 6);
 		var hand = _hand!;
 		Busy = true;
 		var top = hand.TopDiscard;
@@ -313,6 +314,7 @@ public partial class Main : CardGame
 
 	private async Task Knock(int p, Card discard)
 	{
+		ClipMoment("knock", 10);
 		var hand = _hand!;
 		Busy = true;
 		_knock.Visible = _boast.Visible = false;
